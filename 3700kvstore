@@ -23,8 +23,6 @@ class Replica:
         hello = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "hello" }
         self.send(hello)
         print("Sent hello message: %s" % hello, flush=True)
-        self.start_election()
-
 
     def start_election(self):
         self.term += 1
@@ -34,6 +32,7 @@ class Replica:
         request_vote_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "requestVote",
                              "term": self.term, "candidateId": self.id }
         self.send(request_vote_rpc)
+
 
 
 
@@ -79,18 +78,12 @@ class Replica:
 
         elif self.state == "Candidate" and msg['term'] == self.term and msg['voteGranted']:
             self.votes_recieved.append(msg['src'])
-            if len(self.votes_recieved) > (((1 + len(self.others)) / 2) + 1):
+
+            if len(self.votes_recieved) > ((1 + len(self.others)) / 2):
                 self.status = "Leader"
                 self.leader = self.id
                 print("im leader woo", flush=True)
 
-
-
-
-
-
-
-        
 
 
     # delegate request to corresponding function
@@ -111,7 +104,10 @@ class Replica:
 
     def run(self):
         while True:
-            socks = select.select([self.socket], [], [])[0]
+            socks = select.select([self.socket], [], [], .3)[0]
+            if len(socks) == 0:
+                self.start_election()
+
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
                 msg = json.loads(data.decode('utf-8'))
