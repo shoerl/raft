@@ -9,14 +9,33 @@ class Replica:
         self.port = port
         self.id = id
         self.others = others
+        self.leader = 'FFFF'
+        self.term = 0
+        self.voted_for = None
+        self.votes_recieved = []
+
+        self.state = "Follower"
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('localhost', 0))
 
         print("Replica %s starting up" % self.id, flush=True)
-        hello = { "src": self.id, "dst": BROADCAST, "leader": BROADCAST, "type": "hello" }
+        hello = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "hello" }
         self.send(hello)
         print("Sent hello message: %s" % hello, flush=True)
+        self.start_election()
+
+
+    def start_election(self):
+        self.term += 1
+        self.state = "Candidate"
+        self.voted_for = self.id
+        self.votes_recieved = [self.id]
+        request_vote_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "requestVote",
+                             "term": self.term, "candidateId": self.id }
+        self.send(request_vote_rpc)
+
+
 
     def send(self, message):
         print("Sending message '%s'" % (message,), flush=True)
@@ -24,7 +43,7 @@ class Replica:
 
     # get corresponding fail message for a request
     def get_fail_message(self, msg):
-        return {'src': self.id, 'dst': msg['src'], 'leader': 'FFFF', 'type': 'fail', 'MID': msg['MID'] }
+        return {'src': self.id, 'dst': msg['src'], 'leader': self.leader, 'type': 'fail', 'MID': msg['MID'] }
 
     # handle put request and return corresponding response for put request
     def handle_put_request_and_obtain_response(self, msg):
@@ -34,18 +53,65 @@ class Replica:
     def handle_get_request_and_obtain_response(self, msg):
         return self.get_fail_message(msg)
 
+    def handle_vote_request_and_obtain_response(self, msg):
+        if msg['term'] > self.term:
+            self.term = msg['term']
+            self.state = "Follower"
+            self.voted_for = None
+
+        vote_response = {'src': self.id, 'dst': msg['candidateId'], 'leader': self.leader,
+                         'type': 'voteResponse', 'term': self.term }
+
+        if msg['term'] == self.term and self.voted_for in [msg['candidateId'], None]:
+            self.voted_for = msg['candidateId']
+            vote_response['voteGranted'] = True
+        else:
+            vote_response['voteGranted'] = False
+
+        return vote_response
+
+
+    def handle_vote_response(self, msg):
+        if msg['term'] > self.term:
+            self.term = msg['term']
+            self.state = "Follower"
+            self.voted_for = None
+
+        elif self.state == "Candidate" and msg['term'] == self.term and msg['voteGranted']:
+            self.votes_recieved.append(msg['src'])
+            if len(self.votes_recieved) > (((1 + len(self.others)) / 2) + 1):
+                self.status = "Leader"
+                self.leader = self.id
+                print("im leader woo", flush=True)
+
+
+
+
+
+
+
+        
+
+
     # delegate request to corresponding function
     def handle_request(self, msg):
         if msg['type'] == 'put':
             resp = self.handle_put_request_and_obtain_response(msg)
+            self.send(resp)
         elif msg['type'] == 'get':
             resp = self.handle_get_request_and_obtain_response(msg)
+            self.send(resp)
+        elif msg['type'] == 'requestVote':
+            resp = self.handle_vote_request_and_obtain_response(msg)
+            self.send(resp)
+        elif msg['type'] == 'voteResponse':
+            self.handle_vote_response(msg)
+        
 
-        self.send(resp)
 
     def run(self):
         while True:
-            socks = select.select([self.socket], [], [], 0.1)[0]
+            socks = select.select([self.socket], [], [])[0]
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
                 msg = json.loads(data.decode('utf-8'))
