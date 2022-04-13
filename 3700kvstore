@@ -23,10 +23,12 @@ class Replica:
 
     def run(self):
         while True:
-            data, addr = self.socket.recvfrom(65535)
-            msg = data.decode('utf-8')
+            socks = select.select([self.socket], [], [], 0.1)[0]
+            for conn in socks:
+                data, addr = conn.recvfrom(65535)
+                msg = data.decode('utf-8')
 
-            print("Received message '%s'" % (msg,), flush=True)
+                print("Received message '%s'" % (msg,), flush=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='run a key-value store')
