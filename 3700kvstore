@@ -19,16 +19,39 @@ class Replica:
         print("Sent hello message: %s" % hello, flush=True)
 
     def send(self, message):
+        print("Sending message '%s'" % (message,), flush=True)
         self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
+
+    # get corresponding fail message for a request
+    def get_fail_message(self, msg):
+        return {'src': self.id, 'dst': msg['src'], 'leader': 'FFFF', 'type': 'fail', 'MID': msg['MID'] }
+
+    # handle put request and return corresponding response for put request
+    def handle_put_request_and_obtain_response(self, msg):
+        return self.get_fail_message(msg)
+
+    # handle get request and return corresponding response for get request
+    def handle_get_request_and_obtain_response(self, msg):
+        return self.get_fail_message(msg)
+
+    # delegate request to corresponding function
+    def handle_request(self, msg):
+        if msg['type'] == 'put':
+            resp = self.handle_put_request_and_obtain_response(msg)
+        elif msg['type'] == 'get':
+            resp = self.handle_get_request_and_obtain_response(msg)
+
+        self.send(resp)
 
     def run(self):
         while True:
             socks = select.select([self.socket], [], [], 0.1)[0]
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
-                msg = data.decode('utf-8')
-
+                msg = json.loads(data.decode('utf-8'))
                 print("Received message '%s'" % (msg,), flush=True)
+
+                self.handle_request(msg)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='run a key-value store')
