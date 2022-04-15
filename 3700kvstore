@@ -14,6 +14,7 @@ class Replica:
         self.voted_for = None
         self.votes_recieved = []
 
+
         self.state = "Follower"
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -40,17 +41,29 @@ class Replica:
         print("Sending message '%s'" % (message,), flush=True)
         self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
 
+    def get_generalized_message(self, msg):
+        return {'src': self.id, 'dst': msg['src'], 'leader': self.leader, 'MID': msg['MID'] }
+
     # get corresponding fail message for a request
     def get_fail_message(self, msg):
-        return {'src': self.id, 'dst': msg['src'], 'leader': self.leader, 'type': 'fail', 'MID': msg['MID'] }
+        return self.get_generalized_message(msg).update({'type': 'fail'})
+
+    def get_redirect_message(self, msg):
+        return self.get_generalized_message(msg).update({'type': 'redirect'})
 
     # handle put request and return corresponding response for put request
     def handle_put_request_and_obtain_response(self, msg):
-        return self.get_fail_message(msg)
+        if self.leader != self.id:
+            return self.get_redirect_message(msg)
+        else:
+            return self.get_fail_message(msg)
 
     # handle get request and return corresponding response for get request
     def handle_get_request_and_obtain_response(self, msg):
-        return self.get_fail_message(msg)
+        if self.leader != self.id:
+            return self.get_redirect_message(msg)
+        else:
+            return self.get_fail_message(msg)
 
     def handle_vote_request_and_obtain_response(self, msg):
         if msg['term'] > self.term:
