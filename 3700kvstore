@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-import argparse, socket, time, json, select, struct, sys, math, os
+import argparse, socket, time, json, select, struct, sys, math, os, random
+from datetime import datetime
 
 BROADCAST = "FFFF"
 
@@ -13,8 +14,7 @@ class Replica:
         self.term = 0
         self.voted_for = None
         self.votes_recieved = []
-
-
+        self.last_heard_from_leader = datetime.now()
         self.state = "Follower"
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -114,11 +114,18 @@ class Replica:
             self.handle_vote_response(msg)
         
 
+    def ms_since_heard_from_leader(self):
+        return (datetime.now() - self.last_heard_from_leader).total_seconds() * 1000
+
+    def election_timeout(self):
+        print(self.ms_since_heard_from_leader(), flush=True)
+        return self.ms_since_heard_from_leader() >= random.randint(150, 300)
 
     def run(self):
         while True:
-            socks = select.select([self.socket], [], [], .3)[0]
-            if len(socks) == 0:
+            socks = select.select([self.socket], [], [], .1)[0]
+            if self.election_timeout():
+                self.last_heard_from_leader = datetime.now()
                 self.start_election()
 
             for conn in socks:
