@@ -13,6 +13,7 @@ class Replica:
         self.leader = 'FFFF'
         self.term = 0
         self.voted_for = None
+        #TODO: make this a set
         self.votes_recieved = []
         self.last_heard_from_leader = datetime.now()
         self.state = "Follower"
@@ -36,7 +37,6 @@ class Replica:
 
 
 
-
     def send(self, message):
         print("Sending message '%s'" % (message,), flush=True)
         self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
@@ -46,10 +46,10 @@ class Replica:
 
     # get corresponding fail message for a request
     def get_fail_message(self, msg):
-        return self.get_generalized_message(msg).update({'type': 'fail'})
+        return {**self.get_generalized_message(msg), 'type': 'fail'}
 
     def get_redirect_message(self, msg):
-        return self.get_generalized_message(msg).update({'type': 'redirect'})
+        return {**self.get_generalized_message(msg), 'type': 'redirect'}
 
     # handle put request and return corresponding response for put request
     def handle_put_request_and_obtain_response(self, msg):
@@ -64,6 +64,20 @@ class Replica:
             return self.get_redirect_message(msg)
         else:
             return self.get_fail_message(msg)
+
+    def send_append_entries_rpc(self):
+        append_entries_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "appendEntries",
+                               "term": self.term, "entries": [] }
+        self.send(append_entries_rpc)
+
+    def handle_append_entries_rpc(self, msg):
+        if not msg["entries"]:
+            if msg["leader"] != self.leader:
+                self.state = "Follower"
+                self.leader = msg["leader"]
+            self.last_heard_from_leader = datetime.now()
+
+
 
     def handle_vote_request_and_obtain_response(self, msg):
         if msg['term'] > self.term:
@@ -93,8 +107,9 @@ class Replica:
             self.votes_recieved.append(msg['src'])
 
             if len(self.votes_recieved) > ((1 + len(self.others)) / 2):
-                self.status = "Leader"
+                self.state = "Leader"
                 self.leader = self.id
+                self.send_append_entries_rpc()
                 print("im leader woo", flush=True)
 
 
@@ -112,19 +127,21 @@ class Replica:
             self.send(resp)
         elif msg['type'] == 'voteResponse':
             self.handle_vote_response(msg)
+        elif msg['type'] == 'appendEntries':
+            self.handle_append_entries_rpc(msg)
         
-
     def ms_since_heard_from_leader(self):
         return (datetime.now() - self.last_heard_from_leader).total_seconds() * 1000
 
     def election_timeout(self):
-        print(self.ms_since_heard_from_leader(), flush=True)
         return self.ms_since_heard_from_leader() >= random.randint(150, 300)
 
     def run(self):
         while True:
-            socks = select.select([self.socket], [], [], .1)[0]
-            if self.election_timeout():
+            socks = select.select([self.socket], [], [], .05)[0]
+            if self.state == "Leader":
+                self.send_append_entries_rpc()
+            elif self.election_timeout():
                 self.last_heard_from_leader = datetime.now()
                 self.start_election()
 
