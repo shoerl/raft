@@ -156,8 +156,9 @@ class Replica:
 
     def run(self):
         while True:
-            socks = select.select([self.socket], [], [], .1)[0]
-            if self.status == "Leader" and self.ms_since_last_heartbeat() > 100:
+            socks = select.select([self.socket], [], [], .15)[0]
+
+            if self.status == "Leader" and self.ms_since_last_heartbeat() > 150:
                 self.send_append_entries_rpc()
             elif self.status != "Leader" and self.election_timeout():
                 self.start_election()
@@ -168,6 +169,8 @@ class Replica:
                 print("Received message '%s'" % (msg,), flush=True)
 
                 self.handle_request(msg)
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='run a key-value store')
