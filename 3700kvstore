@@ -15,7 +15,9 @@ class Replica:
         self.voted_for = None
         #TODO: make this a set
         self.votes_recieved = []
-        self.last_heard_from_leader = datetime.now()
+        self.election_timer = datetime.now()
+        self.timeout = random.randint(300, 700)
+        self.last_heartbeat_sent = datetime.now()
         self.state = "Follower"
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -34,8 +36,7 @@ class Replica:
         request_vote_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "requestVote",
                              "term": self.term, "candidateId": self.id }
         self.send(request_vote_rpc)
-
-
+        self.election_timer = datetime.now()
 
     def send(self, message):
         print("Sending message '%s'" % (message,), flush=True)
@@ -69,14 +70,18 @@ class Replica:
         append_entries_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "appendEntries",
                                "term": self.term, "entries": [] }
         self.send(append_entries_rpc)
+        self.last_heartbeat_sent = datetime.now()
 
-    def handle_append_entries_rpc(self, msg):
-        if not msg["entries"]:
-            if msg["leader"] != self.leader:
-                self.state = "Follower"
-                self.leader = msg["leader"]
-            self.last_heard_from_leader = datetime.now()
+    def handle_append_entries_and_obtain_response(self, msg):
+        self.election_timer = datetime.now()
+        if msg["term"] > self.term:
+            self.term = msg["term"]
+            self.voted_for = None
 
+        if msg["term"] == self.term and msg["leader"] != self.leader:
+            self.state = "Follower"
+            self.leader = msg["leader"]
+        
 
 
     def handle_vote_request_and_obtain_response(self, msg):
@@ -102,6 +107,7 @@ class Replica:
             self.term = msg['term']
             self.state = "Follower"
             self.voted_for = None
+            self.election_timer = datetime.now()
 
         elif self.state == "Candidate" and msg['term'] == self.term and msg['voteGranted']:
             self.votes_recieved.append(msg['src'])
@@ -109,8 +115,9 @@ class Replica:
             if len(self.votes_recieved) > ((1 + len(self.others)) / 2):
                 self.state = "Leader"
                 self.leader = self.id
-                self.send_append_entries_rpc()
+                self.election_timer = datetime.now()
                 print("im leader woo", flush=True)
+                self.send_append_entries_rpc()
 
 
 
@@ -128,21 +135,20 @@ class Replica:
         elif msg['type'] == 'voteResponse':
             self.handle_vote_response(msg)
         elif msg['type'] == 'appendEntries':
-            self.handle_append_entries_rpc(msg)
+            self.handle_append_entries_and_obtain_response(msg)
         
-    def ms_since_heard_from_leader(self):
-        return (datetime.now() - self.last_heard_from_leader).total_seconds() * 1000
-
     def election_timeout(self):
-        return self.ms_since_heard_from_leader() >= random.randint(150, 300)
+        return ((datetime.now() - self.election_timer).total_seconds() * 1000) >= self.timeout
+
+    def ms_since_last_heartbeat(self):
+        return (datetime.now() - self.last_heartbeat_sent).total_seconds() * 1000
 
     def run(self):
         while True:
-            socks = select.select([self.socket], [], [], .05)[0]
-            if self.state == "Leader":
+            socks = select.select([self.socket], [], [], .1)[0]
+            if self.state == "Leader" and self.ms_since_last_heartbeat() > 100:
                 self.send_append_entries_rpc()
-            elif self.election_timeout():
-                self.last_heard_from_leader = datetime.now()
+            elif self.state != "Leader" and self.election_timeout():
                 self.start_election()
 
             for conn in socks:
