@@ -4,6 +4,7 @@ import argparse, socket, time, json, select, struct, sys, math, os, random
 from datetime import datetime
 
 BROADCAST = "FFFF"
+HEARTBEAT_TIMEOUT = 300
 
 class Replica:
     def __init__(self, port, id, others):
@@ -13,11 +14,10 @@ class Replica:
         self.leader = 'FFFF'
         self.term = 0
         self.voted_for = None
-        #TODO: make this a set
-        self.votes_recieved = []
+        self.votes_recieved = set()
         self.election_timer = datetime.now()
         self.timeout = random.randint(400, 700)
-        self.last_heartbeat_sent = datetime.now()
+        self.last_heartbeat_sent = {}
         self.status = "Follower"
         self.log = [{'term': -1}]
         self.state_machine = {}
@@ -38,9 +38,10 @@ class Replica:
         self.term += 1
         self.status = "Candidate"
         self.voted_for = self.id
-        self.votes_recieved = [self.id]
+        self.votes_recieved.add(self.id)
         request_vote_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "requestVote",
-                             "term": self.term, "candidateId": self.id }
+                             "term": self.term, "candidateId": self.id, "lastLogIndex": len(self.log) - 1,
+                             "lastLogTerm": self.log[-1]["term"] }
         self.send(request_vote_rpc)
         self.election_timer = datetime.now()
 
@@ -76,7 +77,12 @@ class Replica:
             self.send(self.get_redirect_message(msg))
         else:
             entry = {'msg': msg, 'term': self.term}
-            self.send_append_entries_rpc([entry])
+            self.log.append(entry)
+            for rid in self.others:
+                # last log index >= nextIndex for follower
+                if (len(self.log) - 1) >= self.next_index[rid]:
+                    self.send_append_entries_rpc(rid, self.log[self.next_index[rid]:])
+            #self.send_append_entries_rpc([entry])
             #self.state_dict[msg['key']] = msg['value']
             #self.send_append_entries_rpc([entry])
             #return self.get_ok_message(msg)
@@ -90,29 +96,35 @@ class Replica:
             #self.log.append(entry)
             return {**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]}
 
-    def send_append_entries_rpc(self, entries = []):
-        prev_log_idx = len(self.log) - 1
+    def update_term_and_convert_to_follower(self, msg):
+        self.term = msg["term"]
+        self.voted_for = None
+        self.status = "Follower"
+        self.leader = msg["leader"]
+        self.election_timer = datetime.now()
+
+    def send_append_entries_rpc(self, dst, entries = []):
+        prev_log_idx = len(self.log) - 1 - len(entries)
         prev_log_term = self.log[prev_log_idx]['term']
 
-        self.log = [*self.log, *entries]
-
-        append_entries_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "appendEntries",
+        append_entries_rpc = { "src": self.id, "dst": dst, "leader": self.leader, "type": "appendEntries",
                                "term": self.term, "entries": entries, "prevLogIndex": prev_log_idx, "prevLogTerm": prev_log_term,
                                "leaderCommit": self.commit_index }
+        
         self.send(append_entries_rpc)
-        self.last_heartbeat_sent = datetime.now()
+        self.last_heartbeat_sent[dst] = datetime.now()
 
     def handle_append_entries_and_obtain_response(self, msg):
-        self.election_timer = datetime.now()
         if msg["term"] > self.term:
-            self.term = msg["term"]
-            self.voted_for = None
+            self.update_term_and_convert_to_follower(msg)
         
         if msg["term"] == self.term:
             self.status = "Follower"
             self.leader = msg["leader"]
+            self.election_timer = datetime.now()
 
-        append_entries_response = { "src": self.id, "dst": msg['src'], "leader": self.leader, "type": "appendEntriesResponse", "term": self.term }
+        append_entries_response = { "src": self.id, "dst": msg['src'], "leader": self.leader,
+                                    "type": "appendEntriesResponse", "term": self.term }
 
         if msg["term"] < self.term or msg["prevLogIndex"] >= len(self.log) or self.log[msg["prevLogIndex"]]["term"] != msg["prevLogTerm"]:
             append_entries_response["success"] = False
@@ -143,14 +155,14 @@ class Replica:
 
     def handle_append_entries_response(self, msg):
         if msg['term'] > self.term:
-            self.term = msg['term']
-            self.status = "Follower"
-            self.voted_for = None
+            self.update_term_and_convert_to_follower(msg)
 
         if not msg['success']:
+            self.next_index[msg['src']] -= 1
             return
         
-        self.match_index[msg['src']] = msg['lastLogIndex']
+        self.match_index[msg['src']] = msg["lastLogIndex"]
+        self.next_index[msg['src']] = self.match_index[msg['src']] + 1
         for idx in range(self.commit_index + 1, len(self.log)):
             count = 0
             for last_idx in self.match_index.values():
@@ -160,47 +172,43 @@ class Replica:
             if count > (len(self.others) / 2):
                 self.commit_index = idx
 
-        if self.commit_index > self.last_applied:
-            self.last_applied += 1
-            self.do_put(self.log[self.last_applied]["msg"])
-
-
-        return
 
     def handle_vote_request_and_obtain_response(self, msg):
         if msg['term'] > self.term:
-            self.term = msg['term']
-            self.status = "Follower"
-            self.voted_for = None
+            self.update_term_and_convert_to_follower(msg)
 
         vote_response = {'src': self.id, 'dst': msg['candidateId'], 'leader': self.leader,
                          'type': 'voteResponse', 'term': self.term }
 
-        if msg['term'] == self.term and self.voted_for in [msg['candidateId'], None]:
+        log_up_to_date = msg["lastLogIndex"] >= len(self.log) - 1 and msg["lastLogTerm"] >= self.log[-1]["term"] 
+
+        if msg['term'] == self.term and log_up_to_date and self.voted_for in [msg['candidateId'], None]:
             self.voted_for = msg['candidateId']
             vote_response['voteGranted'] = True
         else:
             vote_response['voteGranted'] = False
 
+        self.election_timer = datetime.now()
         return vote_response
 
 
     def handle_vote_response(self, msg):
         if msg['term'] > self.term:
-            self.term = msg['term']
-            self.status = "Follower"
-            self.voted_for = None
-            self.election_timer = datetime.now()
+            self.update_term_and_convert_to_follower(msg)
 
         elif self.status == "Candidate" and msg['term'] == self.term and msg['voteGranted']:
-            self.votes_recieved.append(msg['src'])
+            self.votes_recieved.add(msg['src'])
 
             if len(self.votes_recieved) > ((1 + len(self.others)) / 2):
                 self.status = "Leader"
                 self.leader = self.id
                 self.election_timer = datetime.now()
+                for rid in self.others:
+                    self.next_index[rid] = len(self.log)
+                    self.match_index[rid] = 0
+                    self.send_append_entries_rpc(rid)
                 print("im leader woo", flush=True)
-                self.send_append_entries_rpc()
+
 
 
 
@@ -226,21 +234,28 @@ class Replica:
     def election_timeout(self):
         return ((datetime.now() - self.election_timer).total_seconds() * 1000) >= self.timeout
 
-    def ms_since_last_heartbeat(self):
-        return (datetime.now() - self.last_heartbeat_sent).total_seconds() * 1000
+    def ms_since_last_heartbeat(self, rid):
+        return (datetime.now() - self.last_heartbeat_sent[rid]).total_seconds() * 1000
+
+    def do_put_recur(self):
+        if self.commit_index > self.last_applied:
+            self.last_applied += 1
+            self.do_put(self.log[self.last_applied]["msg"])
+            self.do_put_recur()
 
     def run(self):
         while True:
             socks = select.select([self.socket], [], [], .15)[0]
 
-            if self.commit_index > self.last_applied:
-                self.last_applied += 1
-                self.do_put(self.log[self.last_applied]["msg"])
+            self.do_put_recur()
 
-            if self.status == "Leader" and self.ms_since_last_heartbeat() > 300:
-                self.send_append_entries_rpc()
-            elif self.status != "Leader" and self.election_timeout():
+            if self.status == "Leader":
+                for rid in self.others:
+                    if self.ms_since_last_heartbeat(rid) > HEARTBEAT_TIMEOUT:
+                            self.send_append_entries_rpc(rid)
+            elif self.election_timeout():
                 self.start_election()
+
 
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
