@@ -4,7 +4,7 @@ import argparse, socket, time, json, select, struct, sys, math, os, random
 from datetime import datetime
 
 BROADCAST = "FFFF"
-HEARTBEAT_TIMEOUT = 200
+HEARTBEAT_TIMEOUT = 150
 
 class Replica:
     def __init__(self, port, id, others):
@@ -93,18 +93,12 @@ class Replica:
                 # last log index >= nextIndex for follower
                 if self.get_last_index() >= self.next_index[rid]:
                     self.send_append_entries_rpc(rid, self.log[self.next_index[rid]:])
-            #self.send_append_entries_rpc([entry])
-            #self.state_dict[msg['key']] = msg['value']
-            #self.send_append_entries_rpc([entry])
-            #return self.get_ok_message(msg)
 
     # handle get request and return corresponding response for get request
     def handle_get_request(self, msg):
         if self.leader != self.id:
             self.send(self.get_redirect_message(msg))
         else:
-            #entry = {'type': msg['type'], 'key': msg['key'], 'term': self.term}
-            #self.log.append(entry)
             self.send({**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]})
 
     
@@ -142,10 +136,15 @@ class Replica:
         append_entries_response = { "src": self.id, "dst": msg['src'], "leader": self.leader,
                                     "type": "appendEntriesResponse", "term": self.term }
 
+<<<<<<< Updated upstream
         # if msg and self's term/log info is otherwise mismatched, this was a failed append
         if msg["term"] < self.term or msg["prevLogIndex"] >= len(self.log) or self.log[msg["prevLogIndex"]]["term"] != msg["prevLogTerm"]:
+=======
+        if msg["term"] < self.term or msg["prevLogIndex"] > self.get_last_index() or self.log[msg["prevLogIndex"]]["term"] != msg["prevLogTerm"]:
+>>>>>>> Stashed changes
             append_entries_response["success"] = False
-            return append_entries_response
+            self.send(append_entries_response)
+            return
         
         # idx starts at the last synced log index
         idx = msg["prevLogIndex"]
@@ -169,9 +168,9 @@ class Replica:
 
         # update commit index to be either all of the messages on server or the leader's commit index
         if msg["leaderCommit"] > self.commit_index:
-            self.commit_index = min(msg["leaderCommit"], len(self.log) - 1)
+            self.commit_index = min(msg["leaderCommit"], self.get_last_index())
 
-        append_entries_response["lastLogIndex"] = len(self.log) - 1
+        append_entries_response["lastLogIndex"] = self.get_last_index()
         append_entries_response["success"] = True
         self.send(append_entries_response)
 
@@ -196,10 +195,11 @@ class Replica:
         for rid in self.others:
             n = self.match_index[rid]
             if n > self.commit_index and self.log[n]["term"] == self.term:
-                if self.get_last_index() >= n:
-                    count = 1
-                else:
-                    count = 0
+                count = 1
+                # if self.get_last_index() >= n:
+                #     count = 1
+                # else:
+                #     count = 0
 
                 for last_idx in self.match_index.values():
                     if last_idx >= n:
@@ -259,7 +259,6 @@ class Replica:
                     self.next_index[rid] = len(self.log)
                     self.match_index[rid] = 0
                     self.send_append_entries_rpc(rid)
-                print("im leader woo", flush=True)
 
 
 
