@@ -16,7 +16,7 @@ class Replica:
         self.voted_for = None
         self.votes_recieved = set()
         self.election_timer = datetime.now()
-        self.timeout = random.randint(300, 500)
+        self.timeout = random.randint(400, 650)
         self.last_heartbeat_sent = {}
         self.status = "Follower"
         self.log = [{'term': -1}]
@@ -194,7 +194,7 @@ class Replica:
         vote_response = {'src': self.id, 'dst': msg['candidateId'], 'leader': self.leader,
                          'type': 'voteResponse', 'term': self.term }
 
-        log_up_to_date = msg["lastLogIndex"] >= len(self.log) - 1 and msg["lastLogTerm"] >= self.log[-1]["term"] 
+        log_up_to_date = msg["lastLogIndex"] > len(self.log) - 1 or (msg["lastLogIndex"] == len(self.log) - 1 and msg["lastLogTerm"] >= self.log[msg["lastLogIndex"]]["term"]) 
 
         if msg['term'] == self.term and log_up_to_date and self.voted_for in [msg['candidateId'], None]:
             self.voted_for = msg['candidateId']
