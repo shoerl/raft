@@ -16,7 +16,7 @@ class Replica:
         self.voted_for = None
         self.votes_recieved = set()
         self.election_timer = datetime.now()
-        self.timeout = random.randint(410, 650)
+        self.timeout = random.randint(410, 600)
         self.last_heartbeat_sent = {}
         self.status = "Follower"
         self.log = [{'term': -1}]
@@ -25,14 +25,16 @@ class Replica:
         self.last_applied = 0
         self.next_index = {}
         self.match_index = {}
+        self.count = 0
+        self.get_log = []
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('localhost', 0))
 
-        print("Replica %s starting up" % self.id, flush=True)
+        #print("Replica %s starting up" % self.id, flush=True)
         hello = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "hello" }
         self.send(hello)
-        print("Sent hello message: %s" % hello, flush=True)
+        #print("Sent hello message: %s" % hello, flush=True)
 
     def start_election(self):
         """
@@ -40,6 +42,7 @@ class Replica:
         """
         self.term += 1
         self.status = "Candidate"
+        #self.leader = "FFFF"
         # self votes for self
         self.voted_for = self.id
         # self's received votes include self's vote
@@ -52,7 +55,7 @@ class Replica:
         self.election_timer = datetime.now()
 
     def send(self, message):
-        print("Sending message '%s'" % (message,), flush=True)
+        #print("Sending message '%s'" % (message,), flush=True)
         self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
 
     def get_generalized_message(self, msg):
@@ -74,16 +77,23 @@ class Replica:
     def do_put(self, msg):
         self.state_machine[msg['key']] = msg['value']
         #self.status == "Leader"
-        if msg["dst"] == self.id:
+        if self.leader == self.id:
             self.send(self.get_ok_message(msg))
 
 
-    def do_get(self, key):
-        return self.state_machine[key]
+    def respond_to_get(self):
+        for entry in self.get_log:
+            self.send(entry)
+        self.get_log.clear()
+        #return self.state_machine[key]
 
     # handle put request and return corresponding response for put request
     def handle_put_request(self, msg):
-        if self.leader != self.id:
+        # if self.status == "Candidate":
+        #     self.send(self.get_fail_message(msg))
+        # elif self.status == "Follower":
+        #     self.send(self.get_redirect_message(msg))
+        if self.status != "Leader":
             self.send(self.get_redirect_message(msg))
         # if self is the leader
         else:
@@ -96,10 +106,19 @@ class Replica:
 
     # handle get request and return corresponding response for get request
     def handle_get_request(self, msg):
-        if self.leader != self.id:
+        # if self.status == "Candidate":
+        #     self.send(self.get_fail_message(msg))
+        # elif self.status == "Follower":
+        #     self.send(self.get_redirect_message(msg))
+        if self.status != "Leader":
             self.send(self.get_redirect_message(msg))
         else:
-            self.send({**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]})
+            entry = {**self.get_ok_message(msg), 'value': self.state_machine.get(msg['key'], "")}
+            self.get_log.append(entry)
+            self.count = 0
+            for rid in self.others:
+                self.send_append_entries_rpc(rid)
+            #self.send({**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]})
 
     
     def update_term_and_convert_to_follower(self, msg):
@@ -126,6 +145,8 @@ class Replica:
         self.last_heartbeat_sent[dst] = datetime.now()
 
     def handle_append_entries(self, msg):
+        # update commit index to be either all of the messages on server or the leader's commit index
+
         if msg["term"] > self.term:
             self.update_term_and_convert_to_follower(msg)
         elif msg["term"] == self.term:
@@ -161,7 +182,6 @@ class Replica:
             if entry not in self.log:
                 self.log.append(entry)
 
-        # update commit index to be either all of the messages on server or the leader's commit index
         if msg["leaderCommit"] > self.commit_index:
             self.commit_index = min(msg["leaderCommit"], self.get_last_index())
 
@@ -177,32 +197,33 @@ class Replica:
         # if the msg term is more advanced than self's, fast forward self
         if msg['term'] > self.term:
             self.update_term_and_convert_to_follower(msg)
-            return
+            #return
 
         # if append didn't succeed, exit 
         if not msg['success']:
             self.next_index[msg['src']] -= 1
             return
         
+        self.count += 1
+        if self.count + 1 > (len(self.others) / 2):
+            self.respond_to_get()
+
         self.match_index[msg['src']] = msg["lastLogIndex"]
         self.next_index[msg['src']] = self.match_index[msg['src']] + 1
 
         for rid in self.others:
             n = self.match_index[rid]
-            if n > self.commit_index and self.log[n]["term"] == self.term:
+            if n > self.commit_index and n < len(self.log) and self.log[n]["term"] == self.term:
                 count = 1
-                # if self.get_last_index() >= n:
-                #     count = 1
-                # else:
-                #     count = 0
 
                 for last_idx in self.match_index.values():
                     if last_idx >= n:
                         count += 1
                 if count > (len(self.others) / 2):
                     self.commit_index = n
-                    
 
+                    
+        self.apply_if_needed()
 
         # for idx in range(self.commit_index + 1, len(self.log)):
         #     count = 0
@@ -246,10 +267,11 @@ class Replica:
             # add sender to voters for this candidate
             self.votes_recieved.add(msg['src'])
             # if more than half of the servers voted for self, self is leader
-            if len(self.votes_recieved) > ((1 + len(self.others)) / 2):
+            if len(self.votes_recieved) >= ((len(self.others) + 1) / 2) + 1:
                 self.status = "Leader"
                 self.leader = self.id
                 self.election_timer = datetime.now()
+                #print("yay im leader", flush=True)
                 for rid in self.others:
                     self.next_index[rid] = len(self.log)
                     self.match_index[rid] = 0
@@ -304,6 +326,9 @@ class Replica:
             socks = select.select([self.socket], [], [], .15)[0]
 
             self.apply_if_needed()
+            # if self.leader == self.id and self.status != "Leader":
+            #     print("wtf", flush=True)
+            #     print(self.status, flush=True)
 
             if self.status == "Leader":
                 for rid in self.others:
@@ -317,7 +342,7 @@ class Replica:
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
                 msg = json.loads(data.decode('utf-8'))
-                print("Received message '%s'" % (msg,), flush=True)
+                #print("Received message '%s'" % (msg,), flush=True)
 
                 self.handle_request(msg)
 
