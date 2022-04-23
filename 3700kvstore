@@ -4,7 +4,7 @@ import argparse, socket, time, json, select, struct, sys, math, os, random
 from datetime import datetime
 
 BROADCAST = "FFFF"
-HEARTBEAT_TIMEOUT = 300
+HEARTBEAT_TIMEOUT = 150
 
 class Replica:
     def __init__(self, port, id, others):
@@ -16,7 +16,7 @@ class Replica:
         self.voted_for = None
         self.votes_recieved = set()
         self.election_timer = datetime.now()
-        self.timeout = random.randint(400, 700)
+        self.timeout = random.randint(300, 500)
         self.last_heartbeat_sent = {}
         self.status = "Follower"
         self.log = [{'term': -1}]
@@ -64,7 +64,8 @@ class Replica:
 
     def do_put(self, msg):
         self.state_machine[msg['key']] = msg['value']
-        if msg['dst'] == self.id:
+        #self.status == "Leader"
+        if msg["dst"] == self.id:
             self.send(self.get_ok_message(msg))
 
 
@@ -117,8 +118,7 @@ class Replica:
     def handle_append_entries_and_obtain_response(self, msg):
         if msg["term"] > self.term:
             self.update_term_and_convert_to_follower(msg)
-        
-        if msg["term"] == self.term:
+        elif msg["term"] == self.term:
             self.status = "Follower"
             self.leader = msg["leader"]
             self.election_timer = datetime.now()
@@ -156,6 +156,7 @@ class Replica:
     def handle_append_entries_response(self, msg):
         if msg['term'] > self.term:
             self.update_term_and_convert_to_follower(msg)
+            return
 
         if not msg['success']:
             self.next_index[msg['src']] -= 1
@@ -163,14 +164,27 @@ class Replica:
         
         self.match_index[msg['src']] = msg["lastLogIndex"]
         self.next_index[msg['src']] = self.match_index[msg['src']] + 1
-        for idx in range(self.commit_index + 1, len(self.log)):
-            count = 0
-            for last_idx in self.match_index.values():
-                if last_idx >= idx:
-                    count += 1
 
-            if count > (len(self.others) / 2):
-                self.commit_index = idx
+        for rid in self.others:
+            n = self.match_index[rid]
+            if n > self.commit_index and self.log[n]["term"] == self.term:
+                count = 1
+                for last_idx in self.match_index.values():
+                    if last_idx >= n:
+                        count += 1
+                if count > (len(self.others) / 2):
+                    self.commit_index = n
+                    
+
+
+        # for idx in range(self.commit_index + 1, len(self.log)):
+        #     count = 0
+        #     for last_idx in self.match_index.values():
+        #         if last_idx >= idx:
+        #             count += 1
+
+        #     if count > (len(self.others) / 2):
+        #         self.commit_index = idx
 
 
     def handle_vote_request_and_obtain_response(self, msg):
