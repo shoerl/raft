@@ -35,10 +35,16 @@ class Replica:
         print("Sent hello message: %s" % hello, flush=True)
 
     def start_election(self):
+        """
+        Start the election for leader.
+        """
         self.term += 1
         self.status = "Candidate"
+        # self votes for self
         self.voted_for = self.id
+        # self's received votes include self's vote
         self.votes_recieved = [self.id]
+        # request vote remote procedure call msg
         request_vote_rpc = { "src": self.id, "dst": BROADCAST, "leader": self.leader, "type": "requestVote",
                              "term": self.term, "candidateId": self.id }
         self.send(request_vote_rpc)
@@ -74,6 +80,7 @@ class Replica:
     def handle_put_request(self, msg):
         if self.leader != self.id:
             self.send(self.get_redirect_message(msg))
+        # if self is the leader
         else:
             entry = {'msg': msg, 'term': self.term}
             self.send_append_entries_rpc([entry])
@@ -91,6 +98,11 @@ class Replica:
             return {**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]}
 
     def send_append_entries_rpc(self, entries = []):
+        """
+        Sends the RPC to append the given entries.
+        Args:
+            entries - list 
+        """
         prev_log_idx = len(self.log) - 1
         prev_log_term = self.log[prev_log_idx]['term']
 
@@ -100,39 +112,56 @@ class Replica:
                                "term": self.term, "entries": entries, "prevLogIndex": prev_log_idx, "prevLogTerm": prev_log_term,
                                "leaderCommit": self.commit_index }
         self.send(append_entries_rpc)
+        # update last heartbeat sent time
         self.last_heartbeat_sent = datetime.now()
 
     def handle_append_entries_and_obtain_response(self, msg):
+        """
+        Append entries from the given msg as applicable and have a success response. Otherwise do not append entries if required conditions
+        not met, and have a fail response. 
+        Returns:
+            msg - dict append msg response
+        """
+        # start election timer
         self.election_timer = datetime.now()
+        # if msg term is more advanced than self's term, fast forward self
         if msg["term"] > self.term:
             self.term = msg["term"]
             self.voted_for = None
         
+        # if self's term is up to date, self is a follower following the msg leader
         if msg["term"] == self.term:
             self.status = "Follower"
             self.leader = msg["leader"]
 
         append_entries_response = { "src": self.id, "dst": msg['src'], "leader": self.leader, "type": "appendEntriesResponse", "term": self.term }
 
+        # if msg and self's term/log info is otherwise mismatched, this was a failed append
         if msg["term"] < self.term or msg["prevLogIndex"] >= len(self.log) or self.log[msg["prevLogIndex"]]["term"] != msg["prevLogTerm"]:
             append_entries_response["success"] = False
             return append_entries_response
         
+        # idx starts at the last synced log index
         idx = msg["prevLogIndex"]
         need_to_delete = False
         for entry in msg["entries"]:
+            # idx increments with each entry
             idx += 1
+            # entries need to be deleted if the terms don't match
             if idx < len(self.log) and self.log[idx]["term"] != entry["term"]:
                 need_to_delete = True
                 break
         
+        # delete everything after the calculated index
         if need_to_delete:
             self.log = self.log[:idx]
 
+        # append all unsynced entries
         for entry in msg["entries"]:
             if entry not in self.log:
                 self.log.append(entry)
 
+        # update commit index to be either all of the messages on server or the leader's commit index
         if msg["leaderCommit"] > self.commit_index:
             self.commit_index = min(msg["leaderCommit"], len(self.log) - 1)
 
@@ -142,11 +171,16 @@ class Replica:
 
 
     def handle_append_entries_response(self, msg):
+        """
+        
+        """
+        # if the msg term is more advanced than self's, fast forward self
         if msg['term'] > self.term:
             self.term = msg['term']
             self.status = "Follower"
             self.voted_for = None
 
+        # if append didn't succeed, exit 
         if not msg['success']:
             return
         
@@ -162,12 +196,15 @@ class Replica:
 
         if self.commit_index > self.last_applied:
             self.last_applied += 1
+            # add msg to log
             self.do_put(self.log[self.last_applied]["msg"])
-
 
         return
 
     def handle_vote_request_and_obtain_response(self, msg):
+        """
+        """
+        # if the msg term is more aged than the self's term, update the self to flash forward to the new term
         if msg['term'] > self.term:
             self.term = msg['term']
             self.status = "Follower"
@@ -176,25 +213,31 @@ class Replica:
         vote_response = {'src': self.id, 'dst': msg['candidateId'], 'leader': self.leader,
                          'type': 'voteResponse', 'term': self.term }
 
+        # if the self term is current to the msg term and the msg voted for same candidate as self/self hasn't voted yet
         if msg['term'] == self.term and self.voted_for in [msg['candidateId'], None]:
+            # self votes for the candidate in msg
             self.voted_for = msg['candidateId']
             vote_response['voteGranted'] = True
         else:
+            # if self voted for someone else TODO
             vote_response['voteGranted'] = False
 
         return vote_response
 
 
     def handle_vote_response(self, msg):
+        # if msg term is more advanced than self's term, update the self to flash forward to new term
         if msg['term'] > self.term:
             self.term = msg['term']
             self.status = "Follower"
             self.voted_for = None
             self.election_timer = datetime.now()
 
+        # if msg term is current with self term and self is candidate and msg voted for this candidate
         elif self.status == "Candidate" and msg['term'] == self.term and msg['voteGranted']:
+            # add sender to voters for this candidate
             self.votes_recieved.append(msg['src'])
-
+            # if more than half of the servers voted for self, self is leader
             if len(self.votes_recieved) > ((1 + len(self.others)) / 2):
                 self.status = "Leader"
                 self.leader = self.id
@@ -224,24 +267,40 @@ class Replica:
 
         
     def election_timeout(self):
+        """
+        Is the election age older than the timeout?
+        Returns:
+            timeout - boolean
+        """
         return ((datetime.now() - self.election_timer).total_seconds() * 1000) >= self.timeout
 
     def ms_since_last_heartbeat(self):
+        """
+        Calculates the number of milliseconds since the last heartbeat sent.
+        Returns:
+            ms - number milliseconds
+        """
         return (datetime.now() - self.last_heartbeat_sent).total_seconds() * 1000
 
     def run(self):
+        """
+        Entrypoint to K-V Store
+        """
         while True:
             socks = select.select([self.socket], [], [], .15)[0]
 
+            # if last applied message index isn't at the commit index, increment and 
             if self.commit_index > self.last_applied:
                 self.last_applied += 1
                 self.do_put(self.log[self.last_applied]["msg"])
 
             if self.status == "Leader" and self.ms_since_last_heartbeat() > 300:
                 self.send_append_entries_rpc()
+            # if this is not the leader and election has timed out, do election
             elif self.status != "Leader" and self.election_timeout():
                 self.start_election()
 
+            # handle all of the requests received
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
                 msg = json.loads(data.decode('utf-8'))
