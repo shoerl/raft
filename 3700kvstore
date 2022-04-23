@@ -136,12 +136,7 @@ class Replica:
         append_entries_response = { "src": self.id, "dst": msg['src'], "leader": self.leader,
                                     "type": "appendEntriesResponse", "term": self.term }
 
-<<<<<<< Updated upstream
-        # if msg and self's term/log info is otherwise mismatched, this was a failed append
-        if msg["term"] < self.term or msg["prevLogIndex"] >= len(self.log) or self.log[msg["prevLogIndex"]]["term"] != msg["prevLogTerm"]:
-=======
         if msg["term"] < self.term or msg["prevLogIndex"] > self.get_last_index() or self.log[msg["prevLogIndex"]]["term"] != msg["prevLogTerm"]:
->>>>>>> Stashed changes
             append_entries_response["success"] = False
             self.send(append_entries_response)
             return
