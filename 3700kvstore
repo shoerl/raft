@@ -26,7 +26,7 @@ class Replica:
         self.next_index = {} # for leader to track the next index to send to each replica
         self.match_index = {} # for leader to track the sync commit index for each replica
         self.count = 0
-        self.get_log = []
+        self.get_request_buffer = []
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('localhost', 0))
@@ -82,18 +82,14 @@ class Replica:
 
 
     def respond_to_get(self):
-        for entry in self.get_log:
+        for entry in self.get_request_buffer:
             self.send(entry)
-        self.get_log.clear()
+        self.get_request_buffer.clear()
         #return self.state_machine[key]
 
     # handle put request and return corresponding response for put request
     def handle_put_request(self, msg):
-        # if self.status == "Candidate":
-        #     self.send(self.get_fail_message(msg))
-        # elif self.status == "Follower":
-        #     self.send(self.get_redirect_message(msg))
-        if self.status != "Leader":
+        if self.leader != self.id:
             self.send(self.get_redirect_message(msg))
         # if self is the leader
         else:
@@ -110,12 +106,12 @@ class Replica:
         #     self.send(self.get_fail_message(msg))
         # elif self.status == "Follower":
         #     self.send(self.get_redirect_message(msg))
-        if self.status != "Leader":
+        if self.leader != self.id:
             self.send(self.get_redirect_message(msg))
         else:
             entry = {**self.get_ok_message(msg), 'value': self.state_machine.get(msg['key'], "")}
-            self.get_log.append(entry)
-            self.count = 0
+            self.get_request_buffer.append(entry)
+            self.count = 1
             for rid in self.others:
                 self.send_append_entries_rpc(rid)
             #self.send({**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]})
@@ -206,7 +202,7 @@ class Replica:
             return
         
         self.count += 1
-        if self.count + 1 > (len(self.others) / 2):
+        if self.count > ((len(self.others) + 1) / 2):
             self.respond_to_get()
 
         self.match_index[msg['src']] = msg["lastLogIndex"]
@@ -220,21 +216,11 @@ class Replica:
                 for last_idx in self.match_index.values():
                     if last_idx >= n:
                         count += 1
-                # if more than half of the replicas match to this point, commit index is fast forwarded
-                if count > (len(self.others) / 2):
+                if count > ((len(self.others) + 1) / 2):
                     self.commit_index = n
 
                     
         self.apply_if_needed()
-
-        # for idx in range(self.commit_index + 1, len(self.log)):
-        #     count = 0
-        #     for last_idx in self.match_index.values():
-        #         if last_idx >= idx:
-        #             count += 1
-
-        #     if count > (len(self.others) / 2):
-        #         self.commit_index = idx
 
 
     def handle_vote_request(self, msg):
@@ -269,7 +255,7 @@ class Replica:
             # add sender to voters for this candidate
             self.votes_recieved.add(msg['src'])
             # if more than half of the servers voted for self, self is leader
-            if len(self.votes_recieved) >= ((len(self.others) + 1) / 2) + 1:
+            if len(self.votes_recieved) > ((len(self.others) + 1) / 2):
                 self.status = "Leader"
                 self.leader = self.id
                 self.election_timer = datetime.now()
