@@ -162,6 +162,8 @@ class Replica:
         
         # delete everything after the calculated index
         if need_to_delete:
+            for entry in self.log[idx-1:]:
+                self.send(self.get_redirect_message(entry["msg"]))
             self.log = self.log[:idx]
 
         # append all unsynced entries
@@ -232,6 +234,7 @@ class Replica:
             self.voted_for = msg['candidateId']
             vote_response['voteGranted'] = True
             self.election_timer = datetime.now()
+
         else:
             # if self voted for someone else TODO
             vote_response['voteGranted'] = False
