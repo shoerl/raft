@@ -42,7 +42,6 @@ class Replica:
         """
         self.term += 1
         self.status = "Candidate"
-        #self.leader = "FFFF"
         # self votes for self
         self.voted_for = self.id
         # self's received votes include self's vote
@@ -186,7 +185,10 @@ class Replica:
         # if the msg term is more advanced than self's, fast forward self
         if msg['term'] > self.term:
             self.update_term_and_convert_to_follower(msg)
-            #return
+            return
+
+        if msg["term"] < self.term:
+            return
 
         # if append didn't succeed, exit 
         if not msg['success']:
@@ -222,18 +224,18 @@ class Replica:
         vote_response = {'src': self.id, 'dst': msg['candidateId'], 'leader': self.leader,
                          'type': 'voteResponse', 'term': self.term }
 
-        log_up_to_date = msg["lastLogIndex"] > self.get_last_index() or (msg["lastLogIndex"] == self.get_last_index() and msg["lastLogTerm"] >= self.log[msg["lastLogIndex"]]["term"]) 
+        log_up_to_date = msg["lastLogTerm"] > self.log[-1]["term"] or (msg["lastLogTerm"] == self.log[-1]["term"] and msg["lastLogIndex"] >= self.get_last_index())
 
         # if the self term is current to the msg term/log and the msg voted for same candidate as self/self hasn't voted yet
         if msg['term'] == self.term and log_up_to_date and self.voted_for in [msg['candidateId'], None]:
             # self votes for candidate in msg
             self.voted_for = msg['candidateId']
             vote_response['voteGranted'] = True
+            self.election_timer = datetime.now()
         else:
             # if self voted for someone else TODO
             vote_response['voteGranted'] = False
 
-        self.election_timer = datetime.now()
         self.send(vote_response)
 
 
@@ -246,11 +248,11 @@ class Replica:
         elif self.status == "Candidate" and msg['term'] == self.term and msg['voteGranted']:
             # add sender to voters for this candidate
             self.votes_recieved.add(msg['src'])
+            self.election_timer = datetime.now()
             # if more than half of the servers voted for self, self is leader
             if len(self.votes_recieved) > ((len(self.others) + 1) / 2):
                 self.status = "Leader"
                 self.leader = self.id
-                self.election_timer = datetime.now()
                 for rid in self.others:
                     self.next_index[rid] = len(self.log)
                     self.match_index[rid] = 0
