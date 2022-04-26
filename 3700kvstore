@@ -25,6 +25,8 @@ class Replica:
         self.last_applied = 0
         self.next_index = {}
         self.match_index = {}
+        self.count = 0
+        self.get_request_buffer = []
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(('localhost', 0))
@@ -68,6 +70,11 @@ class Replica:
         if msg["dst"] == self.id:
             self.send(self.get_ok_message(msg))
 
+    def respond_to_get(self):
+        if self.leader == self.id:
+            for msg in self.get_request_buffer:
+                self.send({**self.get_ok_message(msg), 'value': self.state_machine.get(msg['key'], "")})
+        self.get_request_buffer.clear()
 
     def do_get(self, key):
         return self.state_machine[key]
@@ -91,11 +98,15 @@ class Replica:
     # handle get request and return corresponding response for get request
     def handle_get_request_and_obtain_response(self, msg):
         if self.leader != self.id:
-            return self.get_redirect_message(msg)
+            self.send(self.get_redirect_message(msg))
         else:
+            self.get_request_buffer.append(msg)
+            self.count = 1
+            for rid in self.others:
+                self.send_append_entries_rpc(rid)
             #entry = {'type': msg['type'], 'key': msg['key'], 'term': self.term}
             #self.log.append(entry)
-            return {**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]}
+            #return {**self.get_ok_message(msg), 'value': self.state_machine[msg['key']]}
 
     def update_term_and_convert_to_follower(self, msg):
         self.term = msg["term"]
@@ -161,6 +172,10 @@ class Replica:
         if not msg['success']:
             self.next_index[msg['src']] -= 1
             return
+
+        self.count += 1
+        if self.count > ((len(self.others) + 1) / 2):
+            self.respond_to_get()            
         
         self.match_index[msg['src']] = msg["lastLogIndex"]
         self.next_index[msg['src']] = self.match_index[msg['src']] + 1
@@ -231,8 +246,7 @@ class Replica:
         if msg['type'] == 'put':
             self.handle_put_request(msg)
         elif msg['type'] == 'get':
-            resp = self.handle_get_request_and_obtain_response(msg)
-            self.send(resp)
+            self.handle_get_request_and_obtain_response(msg)
         elif msg['type'] == 'requestVote':
             resp = self.handle_vote_request_and_obtain_response(msg)
             self.send(resp)
