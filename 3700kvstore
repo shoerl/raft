@@ -79,9 +79,11 @@ class Replica:
             self.send(self.get_ok_message(msg))
 
     def respond_to_get(self):
-        if self.leader == self.id:
-            for msg in self.get_request_buffer:
+        for msg in self.get_request_buffer:
+            if self.leader == self.id:
                 self.send({**self.get_ok_message(msg), 'value': self.state_machine.get(msg['key'], "")})
+            else:
+                self.send(self.get_redirect_message(msg))
         self.get_request_buffer.clear()
 
     # handle put request and return corresponding response for put request
@@ -163,7 +165,8 @@ class Replica:
         # delete everything after the calculated index
         if need_to_delete:
             for entry in self.log[idx-1:]:
-                self.send(self.get_redirect_message(entry["msg"]))
+                if entry["msg"]["dst"] == self.id:
+                    self.send(self.get_redirect_message(entry["msg"]))
             self.log = self.log[:idx]
 
         # append all unsynced entries
