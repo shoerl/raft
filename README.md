@@ -23,25 +23,22 @@ When a follower recieves a get request, it redirects the client who made that re
 
 
 ## Challenges
-After setting up an initial election sequence that handles timeouts, the complexity increased when it needed to be expanded to handling partitions and deaths of leaders, especially in sequence. Figuring out where to place things was also a challenge at times, for example it was difficult to figure out exactly where to place the functionality for updating the commitIndex for the leader. There were also a lot of edge cases surrounding term numbers (what to do when you recieve a request/response with a larger/smaller term number than our own). Dealing with that logic for term numbers took a lot of thinking through. Figuring out when to reset the election timer was also challenging.
+After setting up an initial election sequence that handles timeouts, the complexity increased when it needed to be expanded to handling partitions and deaths of leaders, especially in sequence. Figuring out where to place things was also a challenge at times, for example it was difficult to figure out exactly where to place the functionality for updating the commitIndex for the leader. There were also a lot of edge cases surrounding term numbers (what to do when you recieve a request/response with a larger/smaller term number than our own). Dealing with that logic for term numbers took a lot of thinking through. Figuring out when to reset the election timer was also challenging. Figuring out the logic for appending entries was also difficult (when we have to delete every log entry after and including the one with conflicting term). Figuring out the timing of things was also a bit weird, but having descriptive log messages helped us work through that.
 
-Debugging was also particularly hard, as there were a lot of messages being sent back and forth and there is also a LOT of information stored for any given replica, so figuring out how to pick out just the information we needed to debug a particular scenario took a lot of effort.
+Working through the logic of sending RPC's and then handling the responses was also hard because you couldn't just send RPC's to all of the other replicas and then deal with those exact responses in the same function, you would have to wait for those to come in on the socket and then delegate them to the corresponding function to handle them and then try to match it up with what you were trying to achieve. This was also due to the nature of having many things going on simultaneously at once.
 
+Debugging was also particularly hard, as there were a lot of messages being sent back and forth and there is also a LOT of information stored for any given replica, so figuring out how to pick out just the information we needed to debug a particular scenario took a lot of effort. Debugging partitions was also particularly weird and took a lot of thinking to work through.
 
 ## Features
 
-Uses a mix of fields to track which requests have been committed to the leader's log, and which requests have not. 
-
-* self.commit_index - the 
-* self.last_applied - TODO?
-* self.next_index = - for leader to track the next index of log to send to each replica
-* self.match_index - for leader to track the sync commit index on each replica's received requests
-
-
-
+Uses a mix of fields to track which requests have been committed to the leader's log, and which requests have not. Most of the fields came from the RAFT paper, though some we came up with ourselves. There are a lot of fields within the class, which in some sense isn't ideal, but it allowed us to accurately track the state of a replica and everything that corresponded with it. I believe we also did a pretty good job breaking up functionality into seperate functions, allowing our code to be more modular and easy to read. We also did a good job using descriptive function names which makes it easier to figure out what is going on at any point or within any function. We also did a good job reusing functions wherever possible in an effort to remove code duplication. Breaking everything up into functions also allowed our main run method to be pretty concise and clean. Using a match/next index for each follower was also a good choice as it allowed us to inherently resend any log entries which did not get recieved by the replica (particularly useful for any test where messages got dropped a lot). We also stored the time of the last heartbeat sent to a given replica, which was a good choice as it allowed us to only send heartbeats if needed. This is because it then allowed us to treat an AppendEntries message sent to a specific rid as a heartbeat regardless of if it contained log entries or not. If we generalized the last heartbeat sent time, we would likely be sending heartbeats to some replicas more often then we actually needed to. We also redirect log messages that are about to be deleted from the old leader, as if they are about to be deleted then that means that the new leader does not have them. We thought this was a particularly clever enhancement.
 
 ## Testing
-Using the testing suite as a baseline, sometimes we modified parameters for testing. Customizing a random seed was useful for recreating a testing instance (32 = seed)
-Focusing on certain test types was also helpful to isolate the exact area of improvement needed when some bug 
+Developing this project iteratively using the steps outlined in the project description made it easy to test at first, as we could usually attribute any issues to the specific thing we just implemented, and then work through the logic of that specific thing. For testing general logic (to ensure a function was actually doing what we expected it to do), it was helpful to disable printing of most log messages and start printing in just that function, with just all of the necessary things to figure out what was going on in that function specifically.
 
-Modified testing script to print out details of failing requests as logs were difficult to parse through and read 
+When the tests got more difficult and introduced many things at once (the advanced test), debugging also became more difficult. We were able to work through this by doing many things. Such as:
+
+*Using the testing suite as a baseline, occasionally modifying parameters for testing.
+*Customizing a random seed was useful for recreating a testing instance (32 = seed).
+*Focusing on certain test types was also helpful to isolate the exact area of improvement needed when dealing with a bug/etc.
+*Modified testing script to print out details of failed/missed requests so we could parse through the rest of the log and figure out exactly where things went wrong
