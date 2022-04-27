@@ -64,7 +64,7 @@ class Replica:
         Args:
             msg - dict representing message to send
         """
-        print("Sending message '%s'" % (message,), flush=True)
+        #print("Sending message '%s'" % (message,), flush=True)
         self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
 
     def get_generalized_message(self, msg):
@@ -258,9 +258,11 @@ class Replica:
         
         # delete everything after the calculated index
         if need_to_delete:
-            for i, entry in enumerate(self.log[idx-1:]):
-                if entry["msg"]["dst"] == self.id and i > self.last_applied:
+            for entry in self.log[idx-1:]:
+                # if we are about to delete a message we recieved from when we were a leader, redirect it so it doesn't get lost
+                if entry["msg"]["dst"] == self.id:
                     self.send(self.get_redirect_message(entry["msg"]))
+ 
             self.log = self.log[:idx]
 
         # append all unsynced entries
@@ -443,7 +445,7 @@ class Replica:
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
                 msg = json.loads(data.decode('utf-8'))
-                print("Received message '%s'" % (msg,), flush=True)
+                #print("Received message '%s'" % (msg,), flush=True)
 
                 self.handle_message(msg)
 
