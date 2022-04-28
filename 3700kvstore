@@ -430,7 +430,6 @@ class Replica:
                 for rid in self.others:
                     # if we are leader and heartbeat timeout elapsed, send heartbeats to all the other replicas
                     if self.heartbeat_timeout_elapsed(rid):
-                        print(len(self.log), flush=True)
                         if self.get_last_index() >= self.next_index[rid]:
                             # send all log entries whose index is >= nextIndex
                             self.send_append_entries_rpc(rid, self.log[self.next_index[rid]:])
