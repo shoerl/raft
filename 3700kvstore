@@ -4,7 +4,7 @@ import argparse, socket, time, json, select, struct, sys, math, os, random
 from datetime import datetime
 
 BROADCAST = "FFFF"
-HEARTBEAT_TIMEOUT = 150
+HEARTBEAT_TIMEOUT = 155
 
 class Replica:
     def __init__(self, port, id, others):
@@ -66,7 +66,7 @@ class Replica:
         Args:
             msg - dict representing message to send
         """
-        print("Sending message '%s'" % (message,), flush=True)
+        #print("Sending message '%s'" % (message,), flush=True)
         self.socket.sendto(json.dumps(message).encode('utf-8'), ('localhost', self.port))
 
     def get_generalized_message(self, msg):
@@ -448,7 +448,7 @@ class Replica:
             for conn in socks:
                 data, addr = conn.recvfrom(65535)
                 msg = json.loads(data.decode('utf-8'))
-                print("Received message '%s'" % (msg,), flush=True)
+                #print("Received message '%s'" % (msg,), flush=True)
 
                 self.handle_message(msg)
 
