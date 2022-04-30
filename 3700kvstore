@@ -347,8 +347,8 @@ class Replica:
             # we've voted for a new leader, reset our election timer
             self.election_timer = datetime.now()
 
+        # else don't grant vote
         else:
-            # if self voted for someone else TODO
             vote_response['voteGranted'] = False
 
         self.send(vote_response)
