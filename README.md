@@ -5,7 +5,7 @@ Sean Hoerl and Jessica van de Ven
 
 ## High-Level Approach
 
-Our high level approach is based on the specifications outlined in the RAFT paper.
+Our high level approach is based on the specifications outlined in the RAFT paper. We also recieved some inspiration from this video: https://www.youtube.com/watch?v=uXEYuDwm7e4 . Specifically, the video helped us with some of the logic for elections. Although in general we found the RAFT paper to be more helpful and based most of our methods on the pseudocode provided in the paper.
 
 When an election starts, the server votes for itself and requests votes, and tracks the start time of the election for aging beyond the randomly-generated timeout threshold. We use randomized timeout intervals for the election timeout. 
 
